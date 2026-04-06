@@ -1,17 +1,19 @@
-/** Baseline points per correct answer (fact not in “difficult” state). */
+/** Default reward for a fact you haven’t stored a weight for yet (first drills). */
 export const POINT_BASE = 0.1;
+/** Minimum reward after many correct answers in a row on the same fact. */
+export const POINT_FLOOR = 0.01;
 /** After a wrong or timeout on a fact, the next correct on that fact earns this much. */
 export const POINT_PEAK = 0.2;
 /**
- * Each time you answer a fact correctly, its weight moves from PEAK toward BASE by this factor
- * applied on the excess over BASE (exponential decay).
+ * Each correct answer on a fact moves its weight from the current value toward POINT_FLOOR
+ * by this factor on the excess over the floor (exponential decay).
  */
 export const POINT_WEIGHT_DECAY = 0.78;
 
 const WEIGHT_EPS = 1e-9;
 
 function clampWeight(x: number): number {
-  return Math.min(POINT_PEAK, Math.max(POINT_BASE, x));
+  return Math.min(POINT_PEAK, Math.max(POINT_FLOOR, x));
 }
 
 function quantizeWeight(x: number): number {
@@ -27,7 +29,7 @@ export function rewardWeightForFact(
   return clampWeight(w);
 }
 
-/** Award points for a correct quiz answer and decay that fact’s weight toward BASE. */
+/** Award points for a correct quiz answer and decay that fact’s weight toward POINT_FLOOR. */
 export function applyFactCorrect(
   totalPoints: number,
   factRewardWeight: Record<string, number>,
@@ -36,13 +38,14 @@ export function applyFactCorrect(
   const safeTotal = Number.isFinite(totalPoints) && totalPoints >= 0 ? totalPoints : 0;
   const w = rewardWeightForFact(factRewardWeight, factKey);
   const nextTotal = safeTotal + w;
-  const nextRaw = POINT_BASE + (w - POINT_BASE) * POINT_WEIGHT_DECAY;
+  const nextRaw = POINT_FLOOR + (w - POINT_FLOOR) * POINT_WEIGHT_DECAY;
   const nextW = quantizeWeight(nextRaw);
   const nextMap = { ...factRewardWeight };
-  if (nextW <= POINT_BASE + WEIGHT_EPS) {
-    delete nextMap[factKey];
+  const clamped = clampWeight(nextW);
+  if (clamped <= POINT_FLOOR + WEIGHT_EPS) {
+    nextMap[factKey] = POINT_FLOOR;
   } else {
-    nextMap[factKey] = clampWeight(nextW);
+    nextMap[factKey] = clamped;
   }
   return { totalPoints: nextTotal, factRewardWeight: nextMap };
 }

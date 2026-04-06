@@ -1,5 +1,5 @@
-import type { GameMode } from "@/lib/modes";
-import { POINT_BASE, POINT_PEAK } from "@/lib/points";
+import { packMedalCompletionBonus, type GameMode } from "@/lib/modes";
+import { POINT_FLOOR, POINT_PEAK } from "@/lib/points";
 import {
   FACTOR_MAX,
   factKey,
@@ -48,8 +48,13 @@ export type SavedGame = {
   progress: Record<GameMode, ModeProgress>;
   /** Cumulative; earned in timed quiz (and retries), see `src/lib/points.ts` */
   totalPoints: number;
-  /** Per fact key `"a-b"` → next correct-answer weight in [POINT_BASE, POINT_PEAK] */
+  /** Per fact key `"a-b"` → next correct-answer weight in [POINT_FLOOR, POINT_PEAK] */
   factRewardWeight: Record<string, number>;
+  /**
+   * Per mode: level indices (1…maxLevel) that already received the one-time medal bonus
+   * for clearing that table’s pack with a perfect run.
+   */
+  packMedalBonusesAtLevel?: Partial<Record<GameMode, number[]>>;
   /** Beat Gold (final mode); show celebration until dismissed */
   grandComplete?: boolean;
 };
@@ -312,9 +317,87 @@ function coerceFactRewardWeight(x: unknown): Record<string, number> {
   for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
     if (typeof k !== "string" || k.length === 0) continue;
     if (typeof v !== "number" || !Number.isFinite(v)) continue;
-    out[k] = Math.min(POINT_PEAK, Math.max(POINT_BASE, v));
+    out[k] = Math.min(POINT_PEAK, Math.max(POINT_FLOOR, v));
   }
   return out;
+}
+
+function coercePackMedalBonuses(
+  raw: unknown,
+): SavedGame["packMedalBonusesAtLevel"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const modes: GameMode[] = ["bronze", "silver", "gold"];
+  const out: Partial<Record<GameMode, number[]>> = {};
+  for (const mode of modes) {
+    const arr = o[mode];
+    if (!Array.isArray(arr)) continue;
+    const levels = [
+      ...new Set(
+        arr.filter(
+          (x): x is number =>
+            typeof x === "number" &&
+            Number.isInteger(x) &&
+            isValidLevel(x),
+        ),
+      ),
+    ].sort((a, b) => a - b);
+    if (levels.length > 0) out[mode] = levels;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Add medal pack bonus for `completedLevel` in `mode` if not already awarded. */
+export function withPackMedalBonusIfEligible(
+  g: SavedGame,
+  mode: GameMode,
+  completedLevel: number,
+): SavedGame {
+  if (!isValidLevel(completedLevel)) return g;
+  const at = g.packMedalBonusesAtLevel;
+  const nextRecord: Record<GameMode, number[]> = {
+    bronze: [...(at?.bronze ?? [])],
+    silver: [...(at?.silver ?? [])],
+    gold: [...(at?.gold ?? [])],
+  };
+  const modeList = nextRecord[mode];
+  if (modeList.includes(completedLevel)) return g;
+  modeList.push(completedLevel);
+  modeList.sort((a, b) => a - b);
+  return {
+    ...g,
+    totalPoints: g.totalPoints + packMedalCompletionBonus(mode),
+    packMedalBonusesAtLevel: nextRecord,
+  };
+}
+
+/** True after a perfect pack clear (medal bonus recorded) for this level in this mode. */
+export function isPackCompletedForLevel(
+  g: SavedGame,
+  mode: GameMode,
+  level: number,
+): boolean {
+  const list = g.packMedalBonusesAtLevel?.[mode];
+  return Array.isArray(list) && list.includes(level);
+}
+
+function mergePackMedalsWithModeComplete(
+  coerced: SavedGame["packMedalBonusesAtLevel"],
+  progress: Record<GameMode, ModeProgress>,
+): SavedGame["packMedalBonusesAtLevel"] {
+  const modes: GameMode[] = ["bronze", "silver", "gold"];
+  const next: Partial<Record<GameMode, number[]>> = {};
+  for (const mode of modes) {
+    const set = new Set<number>(coerced?.[mode] ?? []);
+    if (progress[mode]?.modeComplete === true) {
+      for (let lv = 1; lv <= maxLevel(); lv++) {
+        set.add(lv);
+      }
+    }
+    const arr = [...set].sort((a, b) => a - b);
+    if (arr.length > 0) next[mode] = arr;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function parseSavedGamePayload(
@@ -344,6 +427,11 @@ function parseSavedGamePayload(
     ? coerceFactRewardWeight(g.factRewardWeight)
     : {};
 
+  const packMedalBonusesAtLevel = mergePackMedalsWithModeComplete(
+    loadPoints ? coercePackMedalBonuses(g.packMedalBonusesAtLevel) : undefined,
+    progress,
+  );
+
   const base: SavedGame = {
     v: 4,
     screen: g.screen as Screen,
@@ -353,6 +441,7 @@ function parseSavedGamePayload(
     progress,
     totalPoints,
     factRewardWeight,
+    ...(packMedalBonusesAtLevel ? { packMedalBonusesAtLevel } : {}),
   };
 
   if (g.grandComplete === true) {
@@ -505,6 +594,7 @@ export function selectTable(g: SavedGame, table: number): SavedGame {
   if (table < 2 || table > maxTable()) return g;
   if (table > p.highestUnlockedTable) return g;
   const level = table - 1;
+  if (isPackCompletedForLevel(g, mode, level)) return g;
   const resume =
     p.level === level &&
     !p.awaitingLevelAdvance &&

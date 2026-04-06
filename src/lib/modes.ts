@@ -42,3 +42,19 @@ export function modeIsUnlocked(state: ModeUnlockState, mode: GameMode): boolean 
   if (mode === "silver") return state.silverUnlocked;
   return state.goldUnlocked;
 }
+
+/** One-time bonus `totalPoints` when you first clear a times-table pack in this mode (perfect run). */
+export function packMedalCompletionBonus(mode: GameMode): number {
+  switch (mode) {
+    case "bronze":
+      return 0.5;
+    case "silver":
+      return 1;
+    case "gold":
+      return 1.5;
+    default: {
+      const _: never = mode;
+      return _;
+    }
+  }
+}

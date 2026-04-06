@@ -36,11 +36,18 @@ import {
   selectTable,
   SELECTABLE_TABLES,
   startRetryAfterReview,
+  isPackCompletedForLevel,
+  withPackMedalBonusIfEligible,
   type ModeProgress,
   type SavedGame,
 } from "@/lib/persistence";
 
 const REDEEM_PASSWORD = "1234";
+
+/** Max digits in quiz answer (10×10 = 100; extra headroom). */
+const QUIZ_ANSWER_MAX_DIGITS = 4;
+
+const IS_DEV = process.env.NODE_ENV === "development";
 
 export function MultiplicationGame() {
   const [game, setGame] = useState<SavedGame | null>(null);
@@ -52,6 +59,13 @@ export function MultiplicationGame() {
   const [redeemError, setRedeemError] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleTimeoutRef = useRef<() => void>(() => {});
+  /** Prevents duplicate auto-submit (e.g. Strict Mode) for the same quiz item. */
+  const autoSubmittedQuestionRef = useRef<string | null>(null);
+  const gameRef = useRef<SavedGame | null>(null);
+
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
   const [pointsBumpKey, setPointsBumpKey] = useState(0);
 
   useEffect(() => {
@@ -206,6 +220,71 @@ export function MultiplicationGame() {
     if (ok) setPointsBumpKey((k) => k + 1);
   }, [game, answer, advanceAfterQuizAnswer]);
 
+  const tryAutoSubmitIfCorrect = useCallback(
+    (cleaned: string) => {
+      const g = gameRef.current;
+      if (!g || g.screen !== "play") return;
+      const p = g.progress[g.activeMode]!;
+      if (p.phase !== "quiz" || !p.quiz) return;
+      const factKey = p.quiz.roundKeys[p.quiz.roundIndex];
+      if (factKey === undefined) return;
+      const { a, b } = parseFactKey(factKey);
+      const parsed = Number.parseInt(cleaned.trim(), 10);
+      if (!Number.isFinite(parsed) || parsed !== a * b) return;
+      const qid = `${p.quiz.roundIndex}-${factKey}`;
+      if (autoSubmittedQuestionRef.current === qid) return;
+      autoSubmittedQuestionRef.current = qid;
+      advanceAfterQuizAnswer(true);
+      setPointsBumpKey((k) => k + 1);
+    },
+    [advanceAfterQuizAnswer],
+  );
+
+  const scheduleAutoSubmitCheck = useCallback(
+    (
+      cleaned: string,
+      expectedRoundIndex: number,
+      expectedFactKey: string,
+    ) => {
+      queueMicrotask(() => {
+        const g = gameRef.current;
+        if (!g || g.screen !== "play") return;
+        const p = g.progress[g.activeMode]!;
+        if (p.phase !== "quiz" || !p.quiz) return;
+        if (p.quiz.roundIndex !== expectedRoundIndex) return;
+        if (p.quiz.roundKeys[p.quiz.roundIndex] !== expectedFactKey) return;
+        tryAutoSubmitIfCorrect(cleaned);
+      });
+    },
+    [tryAutoSubmitIfCorrect],
+  );
+
+  const appendQuizDigit = useCallback(
+    (digit: string) => {
+      if (!/^\d$/.test(digit)) return;
+      const g = gameRef.current;
+      if (!g || g.screen !== "play") return;
+      const pr = g.progress[g.activeMode]!;
+      if (pr.phase !== "quiz" || !pr.quiz) return;
+      const ri = pr.quiz.roundIndex;
+      const fk = pr.quiz.roundKeys[ri];
+      if (fk === undefined) return;
+
+      setAnswer((prev) => {
+        const cleaned = (prev + digit)
+          .replace(/\D/g, "")
+          .slice(0, QUIZ_ANSWER_MAX_DIGITS);
+        scheduleAutoSubmitCheck(cleaned, ri, fk);
+        return cleaned;
+      });
+    },
+    [scheduleAutoSubmitCheck],
+  );
+
+  const backspaceQuizAnswer = useCallback(() => {
+    setAnswer((prev) => prev.slice(0, -1));
+  }, []);
+
   useEffect(() => {
     handleTimeoutRef.current = () => {
       advanceAfterQuizAnswer(false);
@@ -276,7 +355,7 @@ export function MultiplicationGame() {
           <span
             key={pointsBumpKey}
             className={`${styles.pointsPill} ${pointsBumpKey > 0 ? styles.pointsPillWin : ""}`}
-            title="Earned on timed questions. Facts you miss pay extra when you get them right next, then the bonus eases back to the usual amount."
+            title="Earned on timed questions. Miss a fact and the next correct pays more; keep getting it right and the reward tapers down toward 0.01."
           >
             {formatPointsDisplay(pointsTotal)} pts
           </span>
@@ -389,14 +468,16 @@ export function MultiplicationGame() {
             >
               Back to modes
             </button>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              style={{ marginTop: "0.65rem", width: "100%" }}
-              onClick={handleReset}
-            >
-              Reset all progress
-            </button>
+            {IS_DEV ? (
+              <button
+                type="button"
+                className={styles.ghostBtn}
+                style={{ marginTop: "0.65rem", width: "100%" }}
+                onClick={handleReset}
+              >
+                Reset all progress
+              </button>
+            ) : null}
           </div>
           <p className={styles.footerNote}>Progress is stored on this device.</p>
         </div>
@@ -475,28 +556,30 @@ export function MultiplicationGame() {
                     reviewWrongKeys: undefined,
                     hadMissThisPack: undefined,
                   };
+                  let next: SavedGame;
                   if (m === "bronze") {
-                    return {
+                    next = {
                       ...g,
                       screen: "pickMode",
                       silverUnlocked: true,
                       progress: { ...g.progress, bronze: cleared },
                     };
-                  }
-                  if (m === "silver") {
-                    return {
+                  } else if (m === "silver") {
+                    next = {
                       ...g,
                       screen: "pickMode",
                       goldUnlocked: true,
                       progress: { ...g.progress, silver: cleared },
                     };
+                  } else {
+                    next = {
+                      ...g,
+                      screen: "pickMode",
+                      grandComplete: true,
+                      progress: { ...g.progress, gold: cleared },
+                    };
                   }
-                  return {
-                    ...g,
-                    screen: "pickMode",
-                    grandComplete: true,
-                    progress: { ...g.progress, gold: cleared },
-                  };
+                  return withPackMedalBonusIfEligible(next, m, pr.level);
                 }
                 const continued: ModeProgress = {
                   ...pr,
@@ -508,11 +591,15 @@ export function MultiplicationGame() {
                   reviewWrongKeys: undefined,
                   hadMissThisPack: undefined,
                 };
-                return {
-                  ...g,
-                  screen: "menu",
-                  progress: { ...g.progress, [m]: continued },
-                };
+                return withPackMedalBonusIfEligible(
+                  {
+                    ...g,
+                    screen: "menu",
+                    progress: { ...g.progress, [m]: continued },
+                  },
+                  m,
+                  pr.level,
+                );
               });
             }}
           >
@@ -542,15 +629,17 @@ export function MultiplicationGame() {
               Each step uses a shorter timer.
             </p>
           </div>
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              onClick={handleReset}
-            >
-              Reset progress
-            </button>
-          </div>
+          {IS_DEV ? (
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={styles.ghostBtn}
+                onClick={handleReset}
+              >
+                Reset progress
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className={styles.modeGrid} role="list">
           {GAME_MODES.map((mode) => {
@@ -630,45 +719,58 @@ export function MultiplicationGame() {
             >
               Modes
             </button>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              onClick={handleReset}
-            >
-              Reset progress
-            </button>
+            {IS_DEV ? (
+              <button
+                type="button"
+                className={styles.ghostBtn}
+                onClick={handleReset}
+              >
+                Reset progress
+              </button>
+            ) : null}
           </div>
         </div>
         <div className={styles.levelGrid} role="list">
           {SELECTABLE_TABLES.map((n) => {
             const unlocked = n <= progMenu.highestUnlockedTable;
+            const levelIdx = n - 1;
+            const completed = isPackCompletedForLevel(
+              game,
+              game.activeMode,
+              levelIdx,
+            );
+            const playable = unlocked && !completed;
             const inProgress = inProgressTable === n;
             return (
               <button
                 key={n}
                 type="button"
                 role="listitem"
-                disabled={!unlocked}
+                disabled={!playable}
                 className={
-                  unlocked
-                    ? inProgress
-                      ? styles.levelCellActive
-                      : styles.levelCell
-                    : styles.levelCellLocked
+                  !unlocked
+                    ? styles.levelCellLocked
+                    : completed
+                      ? styles.levelCellDone
+                      : inProgress
+                        ? styles.levelCellActive
+                        : styles.levelCell
                 }
                 onClick={() => {
-                  if (!unlocked) return;
+                  if (!playable) return;
                   persist((g) => selectTable(g, n));
                   setAnswer("");
                 }}
               >
                 <span className={styles.levelCellNum}>{n}</span>
                 <span className={styles.levelCellHint}>
-                  {unlocked
-                    ? inProgress
-                      ? "Continue"
-                      : "×" + n
-                    : "Locked"}
+                  {!unlocked
+                    ? "Locked"
+                    : completed
+                      ? "Done"
+                      : inProgress
+                        ? "Continue"
+                        : "×" + n}
                 </span>
               </button>
             );
@@ -715,9 +817,11 @@ export function MultiplicationGame() {
             >
               Modes
             </button>
-            <button type="button" className={styles.ghostBtn} onClick={handleReset}>
-              Reset progress
-            </button>
+            {IS_DEV ? (
+              <button type="button" className={styles.ghostBtn} onClick={handleReset}>
+                Reset progress
+              </button>
+            ) : null}
           </div>
         </div>
         <div className={styles.card}>
@@ -753,10 +857,16 @@ export function MultiplicationGame() {
       return (
         <div className={styles.root}>
           {topBar}
-          <p className={styles.subtitle}>Something went wrong. Try reset.</p>
-          <button type="button" className={styles.primaryBtn} onClick={handleReset}>
-            Reset progress
-          </button>
+          <p className={styles.subtitle}>
+            {IS_DEV
+              ? "Something went wrong. Try reset."
+              : "Something went wrong. Reload the page to try again."}
+          </p>
+          {IS_DEV ? (
+            <button type="button" className={styles.primaryBtn} onClick={handleReset}>
+              Reset progress
+            </button>
+          ) : null}
         </div>
       );
     }
@@ -796,13 +906,15 @@ export function MultiplicationGame() {
             >
               Modes
             </button>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              onClick={handleReset}
-            >
-              Reset progress
-            </button>
+            {IS_DEV ? (
+              <button
+                type="button"
+                className={styles.ghostBtn}
+                onClick={handleReset}
+              >
+                Reset progress
+              </button>
+            ) : null}
           </div>
         </div>
         <div className={styles.card}>
@@ -839,10 +951,16 @@ export function MultiplicationGame() {
     return (
       <div className={styles.root}>
         {topBar}
-        <p className={styles.subtitle}>Lesson state missing. Try reset.</p>
-        <button type="button" className={styles.primaryBtn} onClick={handleReset}>
-          Reset progress
-        </button>
+        <p className={styles.subtitle}>
+          {IS_DEV
+            ? "Lesson state missing. Try reset."
+            : "Lesson state missing. Reload the page to try again."}
+        </p>
+        {IS_DEV ? (
+          <button type="button" className={styles.primaryBtn} onClick={handleReset}>
+            Reset progress
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -852,10 +970,16 @@ export function MultiplicationGame() {
     return (
       <div className={styles.root}>
         {topBar}
-        <p className={styles.subtitle}>Quiz state missing. Try reset.</p>
-        <button type="button" className={styles.primaryBtn} onClick={handleReset}>
-          Reset progress
-        </button>
+        <p className={styles.subtitle}>
+          {IS_DEV
+            ? "Quiz state missing. Try reset."
+            : "Quiz state missing. Reload the page to try again."}
+        </p>
+        {IS_DEV ? (
+          <button type="button" className={styles.primaryBtn} onClick={handleReset}>
+            Reset progress
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -904,9 +1028,11 @@ export function MultiplicationGame() {
           >
             Modes
           </button>
-          <button type="button" className={styles.ghostBtn} onClick={handleReset}>
-            Reset progress
-          </button>
+          {IS_DEV ? (
+            <button type="button" className={styles.ghostBtn} onClick={handleReset}>
+              Reset progress
+            </button>
+          ) : null}
         </div>
       </div>
       <div className={styles.card}>
@@ -932,22 +1058,71 @@ export function MultiplicationGame() {
         <div className={styles.equation}>
           {a} × {b} = ?
         </div>
-        <div className={styles.inputRow}>
-          <input
-            ref={inputRef}
-            className={styles.input}
-            inputMode="numeric"
-            autoComplete="off"
-            aria-label="Your answer"
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value.replace(/[^\d-]/g, ""))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitAnswer();
-            }}
-          />
-          <button type="button" className={styles.primaryBtn} onClick={submitAnswer}>
-            Check
-          </button>
+        <div className={styles.quizAnswerBlock}>
+          <div className={styles.inputRow}>
+            <input
+              ref={inputRef}
+              className={styles.input}
+              inputMode="numeric"
+              autoComplete="off"
+              aria-label="Your answer"
+              value={answer}
+              onChange={(e) => {
+                const g = gameRef.current;
+                if (!g || g.screen !== "play") return;
+                const pr = g.progress[g.activeMode]!;
+                if (pr.phase !== "quiz" || !pr.quiz) return;
+                const ri = pr.quiz.roundIndex;
+                const fk = pr.quiz.roundKeys[ri];
+                if (fk === undefined) return;
+
+                const cleaned = e.target.value
+                  .replace(/\D/g, "")
+                  .slice(0, QUIZ_ANSWER_MAX_DIGITS);
+                setAnswer(cleaned);
+                scheduleAutoSubmitCheck(cleaned, ri, fk);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitAnswer();
+              }}
+            />
+            <button type="button" className={styles.primaryBtn} onClick={submitAnswer}>
+              Check
+            </button>
+          </div>
+          <div
+            className={styles.numPad}
+            role="group"
+            aria-label="Number buttons"
+          >
+            {(["7", "8", "9", "4", "5", "6", "1", "2", "3"] as const).map(
+              (d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={styles.numPadBtn}
+                  onClick={() => appendQuizDigit(d)}
+                >
+                  {d}
+                </button>
+              ),
+            )}
+            <button
+              type="button"
+              className={`${styles.numPadBtn} ${styles.numPadBack}`}
+              aria-label="Backspace"
+              onClick={backspaceQuizAnswer}
+            >
+              ⌫
+            </button>
+            <button
+              type="button"
+              className={`${styles.numPadBtn} ${styles.numPadZero}`}
+              onClick={() => appendQuizDigit("0")}
+            >
+              0
+            </button>
+          </div>
         </div>
       </div>
       <p className={styles.footerNote}>
