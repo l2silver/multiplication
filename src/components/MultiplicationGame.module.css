@@ -1,0 +1,520 @@
+.root {
+  --fg: #0f172a;
+  --card-bg: #f8fafc;
+  --input-bg: #ffffff;
+  --accent: #4f46e5;
+  --accent-fg: #ffffff;
+  color: var(--fg);
+  width: 100%;
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .root {
+    --fg: #e2e8f0;
+    --card-bg: #0f172a;
+    --input-bg: #020617;
+    --accent: #818cf8;
+    --accent-fg: #0b1020;
+  }
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: clamp(1.35rem, 3vw, 1.65rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.subtitle {
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  opacity: 0.78;
+  max-width: 28rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.card {
+  border-radius: 1rem;
+  padding: clamp(1.25rem, 3vw, 1.75rem);
+  background: color-mix(in oklab, var(--card-bg) 92%, transparent);
+  border: 1px solid color-mix(in oklab, var(--fg) 12%, transparent);
+  box-shadow: 0 12px 40px color-mix(in oklab, #000 12%, transparent);
+}
+
+.equation {
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  text-align: center;
+  padding: 0.5rem 0 0.25rem;
+}
+
+.answerLine {
+  text-align: center;
+  font-size: clamp(1.25rem, 4vw, 1.5rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.92;
+}
+
+.tip {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
+  font-size: 0.98rem;
+  line-height: 1.55;
+  opacity: 0.88;
+}
+
+.tipLabel {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+  margin-bottom: 0.35rem;
+}
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  opacity: 0.82;
+}
+
+.rewardHint {
+  font-weight: 600;
+  color: color-mix(in oklab, var(--accent) 62%, var(--fg));
+  font-variant-numeric: tabular-nums;
+}
+
+.pointsPill {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.pointsPillWin {
+  transform-origin: center;
+  animation: pointsPillWiggle 0.65s cubic-bezier(0.33, 1.18, 0.55, 1);
+}
+
+@keyframes pointsPillWiggle {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+  20% {
+    transform: scale(1.12) rotate(-5deg);
+  }
+  40% {
+    transform: scale(1.1) rotate(5deg);
+  }
+  60% {
+    transform: scale(1.06) rotate(-3deg);
+  }
+  80% {
+    transform: scale(1.03) rotate(2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pointsPillWin {
+    animation: none;
+  }
+}
+
+.topBar {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin: -0.25rem 0 0.15rem;
+}
+
+.topBarCluster {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.topBarRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.redeemBtn {
+  font-size: 0.8rem;
+  font-weight: 650;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--fg) 22%, transparent);
+  background: color-mix(in oklab, var(--card-bg) 88%, transparent);
+  color: var(--fg);
+}
+
+.redeemBtn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 12%, var(--card-bg));
+}
+
+.redeemBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.redeemPanel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.35rem;
+  padding: 0.85rem;
+  border-radius: 0.85rem;
+  background: var(--card-bg);
+  border: 1px solid color-mix(in oklab, var(--fg) 14%, transparent);
+  box-shadow: 0 14px 36px color-mix(in oklab, #000 18%, transparent);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: min(17rem, calc(100vw - 2.5rem));
+}
+
+.redeemLabel {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.65;
+}
+
+.redeemInput {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--fg) 18%, transparent);
+  background: var(--input-bg);
+  color: var(--fg);
+  padding: 0.55rem 0.7rem;
+  font-size: 1rem;
+}
+
+.redeemInput:focus {
+  outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.redeemError {
+  margin: 0;
+  font-size: 0.85rem;
+  color: color-mix(in oklab, #dc2626 85%, var(--fg));
+}
+
+.redeemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.redeemActions .primaryBtn,
+.redeemActions .ghostBtn {
+  flex: 1 1 auto;
+  min-width: 7rem;
+}
+
+.timerTrack {
+  margin-top: 0.65rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--fg) 12%, transparent);
+  overflow: hidden;
+}
+
+.timerFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--accent) 85%, #fff),
+    var(--accent)
+  );
+  transform-origin: left center;
+  transition: width 80ms linear;
+}
+
+.inputRow {
+  display: flex;
+  gap: 0.65rem;
+  margin-top: 1rem;
+  align-items: stretch;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--fg) 18%, transparent);
+  background: var(--input-bg);
+  color: var(--fg);
+  padding: 0.75rem 0.9rem;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.input:focus {
+  outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.primaryBtn {
+  border: 0;
+  border-radius: 0.75rem;
+  padding: 0.75rem 1.15rem;
+  font-weight: 650;
+  font-size: 0.98rem;
+  cursor: pointer;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ghostBtn {
+  border-radius: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--fg) 18%, transparent);
+  background: transparent;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.ghostBtn:hover {
+  opacity: 1;
+}
+
+.footerNote {
+  font-size: 0.82rem;
+  opacity: 0.65;
+  text-align: center;
+}
+
+.centerStack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.levelGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.levelCell,
+.levelCellActive,
+.levelCellLocked {
+  border-radius: 0.9rem;
+  padding: 0.9rem 0.65rem;
+  min-height: 5.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  border: 1px solid color-mix(in oklab, var(--fg) 14%, transparent);
+  background: color-mix(in oklab, var(--card-bg) 88%, transparent);
+  color: inherit;
+  transition: transform 0.12s ease, border-color 0.12s ease,
+    background 0.12s ease, opacity 0.12s ease;
+}
+
+.levelCell {
+  cursor: pointer;
+}
+
+.levelCell:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+.levelCellActive {
+  cursor: pointer;
+  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  background: color-mix(in oklab, var(--accent) 16%, var(--card-bg));
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--accent) 22%, transparent);
+}
+
+.levelCellActive:hover {
+  transform: translateY(-1px);
+}
+
+.levelCellLocked {
+  cursor: not-allowed;
+  opacity: 0.38;
+  background: color-mix(in oklab, var(--fg) 6%, var(--card-bg));
+}
+
+.levelCellNum {
+  font-size: 1.65rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.levelCellHint {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.72;
+}
+
+.modeGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 520px) {
+  .modeGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.modeCell,
+.modeCellDone,
+.modeCellLocked {
+  border-radius: 0.9rem;
+  padding: 1rem 0.85rem;
+  min-height: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  text-align: center;
+  border: 1px solid color-mix(in oklab, var(--fg) 14%, transparent);
+  background: color-mix(in oklab, var(--card-bg) 88%, transparent);
+  color: inherit;
+  transition: transform 0.12s ease, border-color 0.12s ease,
+    background 0.12s ease, opacity 0.12s ease;
+}
+
+.modeCell {
+  cursor: pointer;
+}
+
+.modeCell:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+.modeCellDone {
+  cursor: pointer;
+  border-color: color-mix(in oklab, #22c55e 40%, transparent);
+  background: color-mix(in oklab, #22c55e 12%, var(--card-bg));
+}
+
+.modeCellDone:hover {
+  transform: translateY(-1px);
+}
+
+.modeCellLocked {
+  cursor: not-allowed;
+  opacity: 0.38;
+  background: color-mix(in oklab, var(--fg) 6%, var(--card-bg));
+}
+
+.modeCellTitle {
+  font-size: 1.2rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.modeCellMeta {
+  font-size: 0.82rem;
+  font-weight: 600;
+  opacity: 0.75;
+  line-height: 1.35;
+}
+
+.modeCellBadge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: color-mix(in oklab, #15803d 90%, var(--fg));
+}
+
+@media (prefers-color-scheme: dark) {
+  .modeCellBadge {
+    color: color-mix(in oklab, #86efac 85%, var(--fg));
+  }
+}
+
+.reviewList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.reviewItem {
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.65rem;
+  background: color-mix(in oklab, var(--fg) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
+}
+
+.reviewEquation {
+  font-size: 1.15rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 520px) {
+  .inputRow {
+    flex-direction: column;
+  }
+}
