@@ -6,6 +6,7 @@ import {
   isValidLevel,
   maxLevel,
   maxTable,
+  newFactsForLevel,
   parseFactKey,
   shuffle,
   allFactsForLevel,
@@ -13,7 +14,10 @@ import {
 
 export const STORAGE_KEY = "multiplication-tutor-v1";
 
-export type Phase = "intro" | "quiz" | "review";
+export type Phase = "intro" | "fullMixBridge" | "quiz" | "review";
+
+/** `narrow` = new row only (×1–×10 for this level’s table); `full` = all tables through this level. */
+export type QuizScope = "narrow" | "full";
 
 export type QuizSlice = {
   roundKeys: string[];
@@ -30,6 +34,8 @@ export type ModeProgress = {
   phase: Phase;
   introIndex: number;
   quiz: QuizSlice | null;
+  /** Set during `quiz` and `review`; omit during `intro`. Missing in old saves = full quiz. */
+  quizScope?: QuizScope;
   /** Fact keys missed in the last round; shown before the retry quiz */
   reviewWrongKeys?: string[];
   /** Any wrong or timed-out answer during this table pack’s quiz tries; blocks unlocking next table until false */
@@ -37,6 +43,11 @@ export type ModeProgress = {
   awaitingLevelAdvance?: boolean;
   /** Cleared every times table through 10 in this mode */
   modeComplete?: boolean;
+  /**
+   * Timed-quiz correct-answer points for this pack are multiplied by this (implicit 1).
+   * Halves when the learner restarts the pack from the lesson.
+   */
+  packPointScale?: number;
 };
 
 export type SavedGame = {
@@ -52,7 +63,7 @@ export type SavedGame = {
   factRewardWeight: Record<string, number>;
   /**
    * Per mode: level indices (1…maxLevel) that already received the one-time medal bonus
-   * for clearing that table’s pack with a perfect run.
+   * for first passing that table’s pack (cumulative quiz) in this mode.
    */
   packMedalBonusesAtLevel?: Partial<Record<GameMode, number[]>>;
   /** Beat Gold (final mode); show celebration until dismissed */
@@ -105,6 +116,40 @@ function validateKeys(keys: string[], level: number): boolean {
       return false;
     }
   });
+}
+
+function validateNarrowKeys(keys: string[], level: number): boolean {
+  const allowed = new Set(
+    newFactsForLevel(level).map((f) => factKey(f.a, f.b)),
+  );
+  return keys.every((k) => {
+    try {
+      const { a, b } = parseFactKey(k);
+      return allowed.has(factKey(a, b));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function coerceQuizScope(x: unknown): QuizScope | undefined {
+  if (x === "narrow" || x === "full") return x;
+  return undefined;
+}
+
+function inferQuizScopeFromKeys(
+  roundKeys: string[],
+  wrongKeys: string[],
+  level: number,
+): QuizScope | null {
+  if (roundKeys.length === 0) return null;
+  if (validateKeys(roundKeys, level) && validateKeys(wrongKeys, level)) {
+    return "full";
+  }
+  if (validateNarrowKeys(roundKeys, level) && validateNarrowKeys(wrongKeys, level)) {
+    return "narrow";
+  }
+  return null;
 }
 
 function clampUnlockTable(n: number): number {
@@ -239,6 +284,20 @@ function coerceHadMiss(p: ModeProgress): boolean {
   return p.hadMissThisPack === true;
 }
 
+function coercePackPointScaleField(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  if (raw <= 0 || raw > 1) return undefined;
+  return Math.round(raw * 1e9) / 1e9;
+}
+
+function attachPackPointScale(raw: unknown, prog: ModeProgress): ModeProgress {
+  const ps = coercePackPointScaleField(
+    (raw as Record<string, unknown>)?.packPointScale,
+  );
+  if (ps === undefined) return prog;
+  return { ...prog, packPointScale: ps };
+}
+
 function parseModeProgress(x: unknown, fallback: ModeProgress): ModeProgress {
   if (!x || typeof x !== "object") return { ...fallback };
   const p = x as ModeProgress;
@@ -249,23 +308,48 @@ function parseModeProgress(x: unknown, fallback: ModeProgress): ModeProgress {
     return { ...fallback };
   if (typeof p.introIndex !== "number" || !Number.isInteger(p.introIndex))
     return { ...fallback };
-  if (p.phase !== "intro" && p.phase !== "quiz" && p.phase !== "review")
+  if (
+    p.phase !== "intro" &&
+    p.phase !== "fullMixBridge" &&
+    p.phase !== "quiz" &&
+    p.phase !== "review"
+  )
     return { ...fallback };
 
   if (p.phase === "intro") {
     if (p.introIndex < 0 || p.introIndex >= FACTOR_MAX) return { ...fallback };
     if (p.quiz !== null) return { ...fallback };
-    return {
+    return attachPackPointScale(x, {
       highestUnlockedTable: p.highestUnlockedTable,
       level: p.level,
       phase: p.phase,
       introIndex: p.introIndex,
       quiz: null,
+      quizScope: undefined,
       awaitingLevelAdvance: p.awaitingLevelAdvance,
       modeComplete: p.modeComplete,
       reviewWrongKeys: undefined,
       hadMissThisPack: coerceHadMiss(p) ? true : undefined,
-    };
+    });
+  }
+
+  if (p.phase === "fullMixBridge") {
+    if (p.introIndex !== 0) return { ...fallback };
+    if (p.quiz !== null) return { ...fallback };
+    const rk = p.reviewWrongKeys;
+    if (Array.isArray(rk) && rk.length > 0) return { ...fallback };
+    return attachPackPointScale(x, {
+      highestUnlockedTable: p.highestUnlockedTable,
+      level: p.level,
+      phase: "fullMixBridge",
+      introIndex: 0,
+      quiz: null,
+      quizScope: undefined,
+      awaitingLevelAdvance: p.awaitingLevelAdvance,
+      modeComplete: p.modeComplete,
+      reviewWrongKeys: undefined,
+      hadMissThisPack: coerceHadMiss(p) ? true : undefined,
+    });
   }
 
   if (p.phase === "review") {
@@ -274,36 +358,61 @@ function parseModeProgress(x: unknown, fallback: ModeProgress): ModeProgress {
     const rk = p.reviewWrongKeys;
     if (!Array.isArray(rk) || rk.length === 0) return { ...fallback };
     if (!rk.every((k) => typeof k === "string")) return { ...fallback };
-    if (!validateKeys(rk, p.level)) return { ...fallback };
-    return {
+    const reviewScope: QuizScope = coerceQuizScope(p.quizScope) ?? "full";
+    if (reviewScope === "narrow") {
+      if (!validateNarrowKeys(rk, p.level)) return { ...fallback };
+    } else if (!validateKeys(rk, p.level)) {
+      return { ...fallback };
+    }
+    return attachPackPointScale(x, {
       highestUnlockedTable: p.highestUnlockedTable,
       level: p.level,
       phase: "review",
       introIndex: 0,
       quiz: null,
+      quizScope: reviewScope,
       reviewWrongKeys: rk,
       awaitingLevelAdvance: p.awaitingLevelAdvance,
       modeComplete: p.modeComplete,
       hadMissThisPack: coerceHadMiss(p) ? true : undefined,
-    };
+    });
   }
 
   if (!isQuizSlice(p.quiz)) return { ...fallback };
   const q = p.quiz;
   if (q.roundIndex < 0 || q.roundIndex > q.roundKeys.length) return { ...fallback };
-  if (!validateKeys(q.roundKeys, p.level)) return { ...fallback };
-  if (!validateKeys(q.wrongThisRound, p.level)) return { ...fallback };
-  return {
+  const declared = coerceQuizScope(p.quizScope);
+  let quizScope: QuizScope;
+  if (declared === "narrow" || declared === "full") {
+    quizScope = declared;
+    const ok =
+      quizScope === "narrow"
+        ? validateNarrowKeys(q.roundKeys, p.level) &&
+          validateNarrowKeys(q.wrongThisRound, p.level)
+        : validateKeys(q.roundKeys, p.level) &&
+          validateKeys(q.wrongThisRound, p.level);
+    if (!ok) return { ...fallback };
+  } else {
+    const inferred = inferQuizScopeFromKeys(
+      q.roundKeys,
+      q.wrongThisRound,
+      p.level,
+    );
+    if (inferred === null) return { ...fallback };
+    quizScope = inferred;
+  }
+  return attachPackPointScale(x, {
     highestUnlockedTable: p.highestUnlockedTable,
     level: p.level,
     phase: p.phase,
     introIndex: p.introIndex,
-    quiz: p.quiz,
+    quiz: q,
+    quizScope,
     awaitingLevelAdvance: p.awaitingLevelAdvance,
     modeComplete: p.modeComplete,
     reviewWrongKeys: undefined,
     hadMissThisPack: coerceHadMiss(p) ? true : undefined,
-  };
+  });
 }
 
 function coerceTotalPoints(x: unknown): number {
@@ -371,7 +480,7 @@ export function withPackMedalBonusIfEligible(
   };
 }
 
-/** True after a perfect pack clear (medal bonus recorded) for this level in this mode. */
+/** True after passing a pack (medal bonus recorded) for this level in this mode. */
 export function isPackCompletedForLevel(
   g: SavedGame,
   mode: GameMode,
@@ -541,6 +650,30 @@ export function ensureQuizState(level: number, quiz: QuizSlice | null): QuizSlic
   return { roundKeys: keys, roundIndex: 0, wrongThisRound: [] };
 }
 
+export function ensureNarrowQuizState(level: number, quiz: QuizSlice | null): QuizSlice {
+  if (
+    quiz &&
+    validateNarrowKeys(quiz.roundKeys, level) &&
+    quiz.roundKeys.length > 0
+  ) {
+    const clampedIndex = Math.min(
+      Math.max(0, quiz.roundIndex),
+      quiz.roundKeys.length,
+    );
+    return {
+      roundKeys: quiz.roundKeys,
+      roundIndex: clampedIndex,
+      wrongThisRound: [...new Set(quiz.wrongThisRound)].filter((k) =>
+        validateNarrowKeys([k], level),
+      ),
+    };
+  }
+  const keys = shuffle(
+    newFactsForLevel(level).map((f) => factKey(f.a, f.b)),
+  );
+  return { roundKeys: keys, roundIndex: 0, wrongThisRound: [] };
+}
+
 export const SELECTABLE_TABLES: readonly number[] = [
   2, 3, 4, 5, 6, 7, 8, 9, 10,
 ];
@@ -574,6 +707,46 @@ export function startRetryAfterReview(g: SavedGame): SavedGame {
   });
 }
 
+/** Reshuffle the current timed round from question 1 (full deck or retry subset). */
+export function restartCurrentQuizRound(g: SavedGame): SavedGame {
+  return mapActiveMode(g, (pr) => {
+    if (pr.phase !== "quiz" || !pr.quiz || !pr.quizScope) return pr;
+    const q = pr.quiz;
+    const lv = pr.level;
+    const scope = pr.quizScope;
+    const narrowCount = newFactsForLevel(lv).length;
+    const fullCount = allFactsForLevel(lv).length;
+    const fullDeck =
+      scope === "narrow"
+        ? q.roundKeys.length === narrowCount
+        : q.roundKeys.length === fullCount;
+    const nextQuiz: QuizSlice = fullDeck
+      ? scope === "narrow"
+        ? ensureNarrowQuizState(lv, null)
+        : ensureQuizState(lv, null)
+      : {
+          roundKeys: shuffle([...q.roundKeys]),
+          roundIndex: 0,
+          wrongThisRound: [],
+        };
+    return { ...pr, quiz: nextQuiz };
+  });
+}
+
+/** Back to intro cards; halves point scale for this pack (redo penalty). */
+export function restartPackFromLessonWithPointPenalty(g: SavedGame): SavedGame {
+  return mapActiveMode(g, (pr) => ({
+    ...pr,
+    phase: "intro",
+    introIndex: 0,
+    quiz: null,
+    quizScope: undefined,
+    reviewWrongKeys: undefined,
+    hadMissThisPack: undefined,
+    packPointScale: (pr.packPointScale ?? 1) * 0.5,
+  }));
+}
+
 export function goToMenu(g: SavedGame): SavedGame {
   return { ...g, screen: "menu" };
 }
@@ -600,6 +773,7 @@ export function selectTable(g: SavedGame, table: number): SavedGame {
     !p.awaitingLevelAdvance &&
     (p.phase === "quiz" ||
       p.phase === "review" ||
+      p.phase === "fullMixBridge" ||
       (p.phase === "intro" && p.introIndex > 0));
   const next: ModeProgress = resume
     ? { ...p }
@@ -609,9 +783,11 @@ export function selectTable(g: SavedGame, table: number): SavedGame {
         phase: "intro",
         introIndex: 0,
         quiz: null,
+        quizScope: undefined,
         awaitingLevelAdvance: false,
         reviewWrongKeys: undefined,
         hadMissThisPack: false,
+        packPointScale: undefined,
       };
   return {
     ...g,

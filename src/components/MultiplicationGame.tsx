@@ -22,10 +22,12 @@ import {
   formatNextRewardPreview,
   formatPointsDisplay,
   rewardWeightForFact,
+  roundMeetsPassAccuracy,
 } from "@/lib/points";
 import {
   clearGame,
   defaultSavedGame,
+  ensureNarrowQuizState,
   ensureQuizState,
   goToMenu,
   goToModePicker,
@@ -37,6 +39,8 @@ import {
   SELECTABLE_TABLES,
   startRetryAfterReview,
   isPackCompletedForLevel,
+  restartCurrentQuizRound,
+  restartPackFromLessonWithPointPenalty,
   withPackMedalBonusIfEligible,
   type ModeProgress,
   type SavedGame,
@@ -67,6 +71,13 @@ export function MultiplicationGame() {
     gameRef.current = game;
   }, [game]);
   const [pointsBumpKey, setPointsBumpKey] = useState(0);
+  const [lessonPeekOpen, setLessonPeekOpen] = useState(false);
+  const [lessonPeekIndex, setLessonPeekIndex] = useState(0);
+
+  const openLessonPeek = useCallback(() => {
+    setLessonPeekIndex(0);
+    setLessonPeekOpen(true);
+  }, []);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -110,7 +121,8 @@ export function MultiplicationGame() {
       ...p,
       introIndex: 0,
       phase: "quiz",
-      quiz: ensureQuizState(p.level, null),
+      quizScope: "narrow",
+      quiz: ensureNarrowQuizState(p.level, null),
       reviewWrongKeys: undefined,
       hadMissThisPack: undefined,
     }));
@@ -128,6 +140,7 @@ export function MultiplicationGame() {
         introIndex: pr.introIndex + 1,
       }));
     });
+    setLessonPeekOpen(false);
     setAnswer("");
   }, [persist, startQuizFromIntro]);
 
@@ -144,12 +157,15 @@ export function MultiplicationGame() {
         const mergeHadMiss = (pr: ModeProgress) =>
           pr.hadMissThisPack === true || !correct ? true : undefined;
 
+        const pointScale = g.progress[g.activeMode]!.packPointScale ?? 1;
+
         const withPoints = (next: SavedGame): SavedGame => {
           if (correct) {
             const { totalPoints, factRewardWeight } = applyFactCorrect(
               next.totalPoints,
               next.factRewardWeight,
               currentKey,
+              pointScale,
             );
             return { ...next, totalPoints, factRewardWeight };
           }
@@ -162,6 +178,8 @@ export function MultiplicationGame() {
         const wrong = new Set(q.wrongThisRound);
         if (!correct) wrong.add(currentKey);
         const wrongArr = [...wrong];
+
+        const scope = p.quizScope ?? "full";
 
         const nextIndex = q.roundIndex + 1;
         if (nextIndex < q.roundKeys.length) {
@@ -178,11 +196,28 @@ export function MultiplicationGame() {
           );
         }
 
-        if (wrongArr.length === 0) {
+        const roundPasses =
+          scope === "narrow"
+            ? wrongArr.length === 0
+            : roundMeetsPassAccuracy(wrongArr.length, q.roundKeys.length);
+
+        if (roundPasses) {
+          if (scope === "narrow") {
+            return withPoints(
+              mapActiveMode(g, (pr) => ({
+                ...pr,
+                phase: "fullMixBridge",
+                quizScope: undefined,
+                quiz: null,
+                reviewWrongKeys: undefined,
+              })),
+            );
+          }
           return withPoints(
             mapActiveMode(g, (pr) => ({
               ...pr,
               quiz: null,
+              quizScope: undefined,
               phase: "intro",
               introIndex: 0,
               awaitingLevelAdvance: true,
@@ -292,7 +327,7 @@ export function MultiplicationGame() {
   }, [advanceAfterQuizAnswer]);
 
   const answerMs = useMemo(
-    () => (game ? secondsForMode(game.activeMode) * 1000 : 8000),
+    () => (game ? secondsForMode(game.activeMode) * 1000 : secondsForMode("bronze") * 1000),
     [game],
   );
 
@@ -486,30 +521,97 @@ export function MultiplicationGame() {
   }
 
   const p = game.progress[game.activeMode]!;
+  const lessonFacts = newFactsForLevel(p.level);
+  const peekLesson =
+    lessonPeekOpen && lessonFacts[lessonPeekIndex] !== undefined
+      ? lessonFacts[lessonPeekIndex]
+      : null;
+  const peekTip =
+    peekLesson !== null ? tipForFact(peekLesson.a, peekLesson.b) : null;
+  const lessonPeekLayer =
+    lessonPeekOpen && peekLesson ? (
+      <div
+        className={styles.lessonPeekBackdrop}
+        onClick={() => setLessonPeekOpen(false)}
+        role="presentation"
+      >
+        <div
+          className={styles.lessonPeekPanel}
+          role="dialog"
+          aria-label="Lesson cards"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={styles.lessonPeekHeader}>
+            <span>
+              Lesson — card {lessonPeekIndex + 1} of {lessonFacts.length}
+            </span>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={() => setLessonPeekOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className={styles.equation}>
+            {peekLesson.a} × {peekLesson.b} = ?
+          </div>
+          <div className={styles.answerLine}>
+            {peekLesson.a} × {peekLesson.b} = {peekLesson.a * peekLesson.b}
+          </div>
+          {peekTip ? (
+            <div className={styles.tip}>
+              <div className={styles.tipLabel}>Memorization tip</div>
+              {peekTip}
+            </div>
+          ) : null}
+          <div className={styles.lessonPeekNav}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              disabled={lessonPeekIndex <= 0}
+              onClick={() => setLessonPeekIndex((i) => Math.max(0, i - 1))}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              disabled={lessonPeekIndex + 1 >= lessonFacts.length}
+              onClick={() =>
+                setLessonPeekIndex((i) =>
+                  Math.min(lessonFacts.length - 1, i + 1),
+                )
+              }
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null;
 
   if (p.awaitingLevelAdvance) {
     const isFinalTable = p.level >= maxLevel();
     const maxTableDone = p.level + 1;
-    const packPerfect = p.hadMissThisPack !== true;
+    const hadSlips = p.hadMissThisPack === true;
     return (
       <div className={styles.root}>
         {topBar}
         <div className={styles.centerStack}>
           <h1 className={styles.title}>
-            {!packPerfect
-              ? "Redo this pack"
-              : isFinalTable
-                ? `${modeTitle(game.activeMode)} — pack complete!`
-                : `Through the ${maxTableDone} times table`}
+            {isFinalTable
+              ? `${modeTitle(game.activeMode)} — pack complete!`
+              : `Through the ${maxTableDone} times table`}
           </h1>
           <p className={styles.subtitle}>
-            {!packPerfect
-              ? "To unlock the next times table, you need a perfect run — no wrong answers or timeouts. You’ll go through the lesson cards again, then another timed round."
-              : isFinalTable
-                ? game.activeMode === "gold"
-                  ? "You finished the final timed set. The full medal path is yours."
-                  : `You've finished every table in ${modeTitle(game.activeMode)}. The next mode unlocks on the map.`
-                : "Perfect round — every answer correct. A new times table is now on the map."}
+            {isFinalTable
+              ? game.activeMode === "gold"
+                ? "You finished the final timed set. The full medal path is yours."
+                : `You've finished every table in ${modeTitle(game.activeMode)}. The next mode unlocks on the map.`
+              : hadSlips
+                ? "You scored above 89% on the full-level mix — enough to unlock the next times table. You can replay from the map anytime."
+                : "You scored above 89% on the cumulative timed round. A new times table is now on the map."}
           </p>
           <button
             type="button"
@@ -523,26 +625,6 @@ export function MultiplicationGame() {
                   Math.max(pr.highestUnlockedTable, pr.level + 2),
                 );
                 const finalTable = pr.level >= maxLevel();
-                const perfect = pr.hadMissThisPack !== true;
-
-                if (!perfect) {
-                  return {
-                    ...g,
-                    screen: "play",
-                    progress: {
-                      ...g.progress,
-                      [m]: {
-                        ...pr,
-                        phase: "intro",
-                        introIndex: 0,
-                        quiz: null,
-                        awaitingLevelAdvance: false,
-                        reviewWrongKeys: undefined,
-                        hadMissThisPack: undefined,
-                      },
-                    },
-                  };
-                }
 
                 if (finalTable) {
                   const cleared: ModeProgress = {
@@ -551,10 +633,12 @@ export function MultiplicationGame() {
                     awaitingLevelAdvance: false,
                     modeComplete: true,
                     quiz: null,
+                    quizScope: undefined,
                     phase: "intro",
                     introIndex: 0,
                     reviewWrongKeys: undefined,
                     hadMissThisPack: undefined,
+                    packPointScale: undefined,
                   };
                   let next: SavedGame;
                   if (m === "bronze") {
@@ -586,10 +670,12 @@ export function MultiplicationGame() {
                   highestUnlockedTable: nextUnlock,
                   awaitingLevelAdvance: false,
                   quiz: null,
+                  quizScope: undefined,
                   phase: "intro",
                   introIndex: 0,
                   reviewWrongKeys: undefined,
                   hadMissThisPack: undefined,
+                  packPointScale: undefined,
                 };
                 return withPackMedalBonusIfEligible(
                   {
@@ -603,13 +689,11 @@ export function MultiplicationGame() {
               });
             }}
           >
-            {!packPerfect
-              ? "Try again from the start"
-              : isFinalTable && game.activeMode === "gold"
-                ? "Continue"
-                : isFinalTable
-                  ? "Back to modes"
-                  : "Back to levels"}
+            {isFinalTable && game.activeMode === "gold"
+              ? "Continue"
+              : isFinalTable
+                ? "Back to modes"
+                : "Back to levels"}
           </button>
         </div>
       </div>
@@ -693,6 +777,7 @@ export function MultiplicationGame() {
       !progMenu.awaitingLevelAdvance &&
       (progMenu.phase === "quiz" ||
         progMenu.phase === "review" ||
+        progMenu.phase === "fullMixBridge" ||
         (progMenu.phase === "intro" && progMenu.introIndex > 0))
         ? progMenu.level + 1
         : null;
@@ -707,8 +792,10 @@ export function MultiplicationGame() {
               {modeTitle(game.activeMode)} · Times tables
             </h1>
             <p className={styles.subtitle}>
-              {sec} seconds per question in this mode. Work from the 2s upward;
-              finish a pack to unlock the next column.
+              {sec} seconds per question in this mode. Work from the 2s upward. The{" "}
+              <strong>cumulative</strong> timed round needs a score{" "}
+              <strong>above 89%</strong> on the full mix. The narrow round must be{" "}
+              <strong>perfect</strong> (no misses) before the full mix.
             </p>
           </div>
           <div className={styles.actions}>
@@ -777,9 +864,103 @@ export function MultiplicationGame() {
           })}
         </div>
         <p className={styles.footerNote}>
-          Each pack teaches the new row, then quizzes on every table in this level
-          (×1–×{FACTOR_MAX}).
+          Each pack: answer cards for the new row, a timed quiz on that row only,
+          a short screen that previews the full mix (2s through your new table),
+          then the timed full-level round (×1–×{FACTOR_MAX}).
         </p>
+      </div>
+    );
+  }
+
+  if (p.phase === "fullMixBridge") {
+    const hi = p.level + 1;
+    const tablesLabel =
+      hi <= 2 ? "the 2 times table" : `the 2 times table through the ${hi} times table`;
+    const sec = secondsForMode(game.activeMode);
+
+    return (
+      <div className={styles.root}>
+        {topBar}
+        {lessonPeekLayer}
+        <div className={styles.headerRow}>
+          <div>
+            <h1 className={styles.title}>
+              {modeTitle(game.activeMode)} · Level {p.level}
+            </h1>
+            <p className={styles.subtitle}>
+              You cleared the new row. Next up: a timed mix of every fact you&apos;ve
+              learned in this level so far.
+            </p>
+          </div>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={openLessonPeek}
+            >
+              Review lesson
+            </button>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={() => persist((g) => goToMenu(g))}
+            >
+              Levels
+            </button>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={() => persist((g) => goToModePicker(g))}
+            >
+              Modes
+            </button>
+            {IS_DEV ? (
+              <button
+                type="button"
+                className={styles.ghostBtn}
+                onClick={handleReset}
+              >
+                Reset progress
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className={styles.card}>
+          <p className={styles.subtitle} style={{ marginBottom: "1rem" }}>
+            The full round includes {tablesLabel} (×1–×{FACTOR_MAX}), shuffled, at{" "}
+            {sec} second{sec === 1 ? "" : "s"} per question. You pass this level when you
+            score <strong>above 89%</strong> on this cumulative round (timeouts count as
+            misses).
+          </p>
+          <div className={styles.quizToolRow}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={() => persist((g) => restartPackFromLessonWithPointPenalty(g))}
+            >
+              Start pack over from lesson
+            </button>
+          </div>
+          <button
+            type="button"
+            className={styles.primaryBtn}
+            style={{ width: "100%" }}
+            onClick={() => {
+              persist((g) =>
+                mapActiveMode(g, (pr) => ({
+                  ...pr,
+                  phase: "quiz",
+                  quizScope: "full",
+                  quiz: ensureQuizState(pr.level, null),
+                  reviewWrongKeys: undefined,
+                })),
+              );
+              setAnswer("");
+            }}
+          >
+            Start full mix
+          </button>
+        </div>
       </div>
     );
   }
@@ -788,21 +969,36 @@ export function MultiplicationGame() {
     const uniqueKeys = [...new Set(p.reviewWrongKeys)];
     const facts = uniqueKeys.map((k) => parseFactKey(k));
     const sec = secondsForMode(game.activeMode);
+    const reviewScope = p.quizScope ?? "full";
 
     return (
       <div className={styles.root}>
         {topBar}
+        {lessonPeekLayer}
         <div className={styles.headerRow}>
           <div>
-            <h1 className={styles.title}>Reviewing hard questions</h1>
+            <h1 className={styles.title}>
+              {reviewScope === "narrow"
+                ? "Reviewing the new row"
+                : "Reviewing hard questions"}
+            </h1>
             <p className={styles.subtitle}>
               You missed {uniqueKeys.length} fact
               {uniqueKeys.length === 1 ? "" : "s"} this round. Take a moment
               with the answers — then you&apos;ll get another timed pass with
-              just these problems ({sec}s each).
+              {reviewScope === "narrow"
+                ? ` just the new ${p.level + 1}s (${sec}s each).`
+                : ` these problems (${sec}s each).`}
             </p>
           </div>
           <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={openLessonPeek}
+            >
+              Review lesson
+            </button>
             <button
               type="button"
               className={styles.ghostBtn}
@@ -845,6 +1041,14 @@ export function MultiplicationGame() {
           >
             Practice these questions
           </button>
+          <button
+            type="button"
+            className={styles.ghostBtn}
+            style={{ marginTop: "0.65rem", width: "100%" }}
+            onClick={() => persist((g) => restartPackFromLessonWithPointPenalty(g))}
+          >
+            Start pack over from lesson (points for this pack halve)
+          </button>
         </div>
       </div>
     );
@@ -881,6 +1085,7 @@ export function MultiplicationGame() {
     return (
       <div className={styles.root}>
         {topBar}
+        {lessonPeekLayer}
         <div className={styles.headerRow}>
           <div>
             <h1 className={styles.title}>
@@ -892,6 +1097,13 @@ export function MultiplicationGame() {
             </p>
           </div>
           <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={openLessonPeek}
+            >
+              Browse lesson
+            </button>
             <button
               type="button"
               className={styles.ghostBtn}
@@ -936,12 +1148,15 @@ export function MultiplicationGame() {
             style={{ marginTop: "1.25rem", width: "100%" }}
             onClick={introNext}
           >
-            {p.introIndex + 1 >= FACTOR_MAX ? "Start timed practice" : "Next"}
+            {p.introIndex + 1 >= FACTOR_MAX
+              ? "Start quiz: new row only"
+              : "Next"}
           </button>
         </div>
         <p className={styles.footerNote}>
-          After intro cards, you&apos;ll get random questions from every table in
-          this level ({tablesLabel}).
+          After these cards: narrow timed quiz with <strong>no misses</strong>, then the{" "}
+          <strong>full cumulative mix</strong> ({tablesLabel}; score <strong>above 89%</strong>
+          ).
         </p>
       </div>
     );
@@ -999,21 +1214,37 @@ export function MultiplicationGame() {
   const position = q.roundIndex + 1;
   const misses = new Set(q.wrongThisRound).size;
   const sec = secondsForMode(game.activeMode);
+  const quizScope = p.quizScope ?? "full";
 
   return (
     <div className={styles.root}>
       {topBar}
+      {lessonPeekLayer}
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>
             {modeTitle(game.activeMode)} · Level {p.level}
+            {quizScope === "narrow" ? " · New row" : " · Full level"}
           </h1>
           <p className={styles.subtitle}>
-            {sec} seconds per question. Timeouts count as misses and come back in
-            the retry stack.
+            {quizScope === "narrow"
+              ? `${sec}s per question — only the new ${p.level + 1} times table (×1–×${FACTOR_MAX}). Then you’ll do the full mix for this level.`
+              : `${sec}s per question — every table from 2 through ${p.level + 1} (×1–×${FACTOR_MAX}). Timeouts count as misses and come back in the retry stack.`}
+            {p.packPointScale !== undefined && p.packPointScale < 1
+              ? ` Pack redo: each correct earns ${(p.packPointScale * 100).toFixed(
+                  0,
+                )}% of the usual points.`
+              : null}
           </p>
         </div>
         <div className={styles.actions}>
+          <button
+            type="button"
+            className={styles.ghostBtn}
+            onClick={openLessonPeek}
+          >
+            Review lesson
+          </button>
           <button
             type="button"
             className={styles.ghostBtn}
@@ -1044,10 +1275,30 @@ export function MultiplicationGame() {
           <span className={styles.rewardHint}>
             +
             {formatNextRewardPreview(
-              rewardWeightForFact(game.factRewardWeight, key),
+              rewardWeightForFact(game.factRewardWeight, key) *
+                (p.packPointScale ?? 1),
             )}{" "}
             if correct
           </span>
+        </div>
+        <div className={styles.quizToolRow}>
+          <button
+            type="button"
+            className={styles.ghostBtn}
+            onClick={() => {
+              persist((g) => restartCurrentQuizRound(g));
+              setAnswer("");
+            }}
+          >
+            Restart this timed round
+          </button>
+          <button
+            type="button"
+            className={styles.ghostBtn}
+            onClick={() => persist((g) => restartPackFromLessonWithPointPenalty(g))}
+          >
+            Start pack over from lesson
+          </button>
         </div>
         <div className={styles.timerTrack} aria-hidden>
           <div
@@ -1126,8 +1377,9 @@ export function MultiplicationGame() {
         </div>
       </div>
       <p className={styles.footerNote}>
-        Facts in this drill: tables 2 through {p.level + 1} (×1–×{FACTOR_MAX}
-        ). The wrong stack clears when you nail every fact in a round.
+        {quizScope === "narrow"
+          ? `This pass is only the ${p.level + 1} times table. A perfect round (no misses) unlocks the full-level mix.`
+          : `Facts in this drill: tables 2 through ${p.level + 1} (×1–×${FACTOR_MAX}). Finish above 89% on this cumulative round to pass the level. Starting over from the lesson halves points for this pack.`}
       </p>
     </div>
   );

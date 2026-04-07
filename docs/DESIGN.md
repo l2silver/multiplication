@@ -2,21 +2,21 @@
 
 ## Product goals
 
-Help learners build fluent recall of multiplication facts through **cumulative tables**, a **learn-then-drill** flow, **timed practice** at three difficulty paces, **targeted retries**, and clear **progression rules** (including a **perfect-run** requirement to advance).
+Help learners build fluent recall of multiplication facts through **cumulative tables**, a **learn-then-drill** flow, **timed practice** at three difficulty paces, **targeted retries**, and clear **progression rules**: the **narrow** timed round must be **perfect** (no misses); the **cumulative / full-level** round passes with **accuracy above 89%**. **Unlocking the next times table** depends on passing that **full-level** round.
 
 ## Navigation & modes
 
 1. **Mode picker** — Choose **Bronze**, **Silver**, or **Gold**. Silver unlocks after clearing every times table (2–10) in Bronze; Gold after the same in Silver.
 2. **Level grid** — A 3×3 map for tables **2–10**. Only tables up to **`highestUnlockedTable`** are selectable; the learner works upward.
-3. **Play** — Intro cards, timed quiz, optional **review** screen, then retry rounds as needed.
+3. **Play** — A fixed sequence of **intro cards**, **narrow timed quiz** (new row only), **full-mix bridge screen**, **full timed quiz** (everything through this level), optional **review** rounds, then **pack complete** when the **full** quiz passes the accuracy threshold.
 
 Timer per question depends on mode:
 
 | Mode   | Seconds per question |
 |--------|----------------------:|
-| Bronze | 8 |
-| Silver | 6 |
-| Gold   | 4 |
+| Bronze | 10 |
+| Silver | 8 |
+| Gold   | 6 |
 
 ## Level model
 
@@ -24,65 +24,98 @@ Timer per question depends on mode:
 - Level **L** drills **all facts** for tables **2** through **L + 1**, second factor **1–10** (×1 … ×10).
 - **Level 1** = 2s only. **Level 9** = 2s through **10s** (`maxTable()` = 10, `maxLevel()` = 9). The UI labels levels by the **table** number (`level + 1`), e.g. “Level 9” corresponds to the 10× table row.
 
-## Per-table pack flow
+## Phases & pack flow
 
-### 1. Introduction (“new table”)
+Progress for the active table is stored in **`ModeProgress`** (`src/lib/persistence.ts`). **`phase`** is one of:
 
-- For the current level, the learner sees **one card at a time** for the **new** table: **(L+1)×1 … (L+1)×10**.
-- Each card shows equation + answer, plus an optional **tip** (`src/data/tips.ts`).
-- After the last card → **Start timed practice** begins the quiz.
+| Phase | Purpose |
+|-------|---------|
+| **`intro`** | Answer cards for the **new** row only: **(L+1)×1 … (L+1)×10**, one card at a time. Optional tips (`src/data/tips.ts`). No timer. |
+| **`quiz`** | Timed drill. Scope is **`quizScope`**: **`narrow`** (that new row only) or **`full`** (all facts for tables 2 … L+1). Shuffled **round** of keys; wrong answers and timeouts accumulate a **wrong stack** for the round. |
+| **`fullMixBridge`** | **Between** a passing **narrow** round and the **full** quiz: a non-timed screen that states the learner is about to run the **full mix** (2s through the current table, ×1–×10). **Continue** starts **`quiz`** with **`quizScope: "full"`**. |
+| **`review`** | After a round that **fails** the accuracy threshold: list missed facts with answers; **Practice these questions** starts another **`quiz`** retry using **only** those keys (still tagged with the same **`quizScope`** as the failed round). |
 
-### 2. Timed quiz
+**`quizScope`** is stored during **`quiz`** and **`review`**; it is cleared during **`intro`** and **`fullMixBridge`**. Legacy saves without **`quizScope`** infer **narrow** vs **full** from which fact keys appear in the quiz slice.
 
-- Questions are a **shuffled** pass over **all facts** in the level (tables 2 … L+1).
-- **Correct** → next question.
-- **Wrong** or **timeout** → fact recorded for this round; same rules as a miss for progression (see **Perfect run**, below).
+### Pass rule (timed rounds)
 
-### 3. End of round
+- **Narrow** (`quizScope: "narrow"`): a round **passes** only with **zero** wrong or timed-out questions (including narrow-scoped review retries).
+- **Full / cumulative** (`quizScope: "full"`): a round **passes** when **more than 89%** of questions are correct (`roundMeetsPassAccuracy` in **`src/lib/points.ts`**, `LEVEL_PASS_ACCURACY_THRESHOLD = 0.89`).
+- **Narrow** must pass to reach the bridge and the **full** mix.
+- **Unlocking the next column** requires passing the **full / cumulative** timed round for that level (**> 89%**). **`hadMissThisPack`** may still be set for messaging; it does **not** block unlock after a passing full round.
 
-- **No misses in the round** → **pack-complete** screen (awaiting advance). Unlock rules below.
-- **Any misses** → **`review` phase**: list missed facts as equations with answers (“Reviewing hard questions”), then **Practice these questions** starts a **new timed round** with **only** those keys, shuffled. The wrong stack can fill again until a round ends clean.
+### Typical happy path
 
-So: intro → quiz → (optional) review → retry quiz → … until a round has **zero** misses.
+1. **Intro** — advance through 10 cards → start **narrow** quiz.
+2. **Narrow quiz** — **perfect** round → **`fullMixBridge`**.
+3. **Full mix bridge** — learner reads the heads-up → **Start full mix**.
+4. **Full quiz** — finish with **> 89%** correct → **pack-complete** (awaiting advance).
 
-### 4. Perfect run (unlock next table)
+If a timed phase **does not** pass, flow is **review → retry** until a round passes.
 
-- **`hadMissThisPack`** is set if **any** answer in the pack’s quiz attempts is wrong or timed out (including retries).
-- On the pack-complete screen, if **`hadMissThisPack`** is true:
-  - The learner **does not** unlock the next column.
-  - **Continue** sends them back to **intro from the start** (card 1) for the **same** table, with quiz/review/advance state cleared and the miss flag cleared.
-- If the completing round was **perfect** (no misses that pack), **Continue** bumps **`highestUnlockedTable`** and returns to the level grid (or handles **mode complete** / **grand complete** when finishing table 10).
+### Rounds, retries, lesson review, and restarts
 
-Finishing all tables in a mode unlocks the **next medal mode** on the picker (Bronze → silver flag, Silver → gold flag, Gold → `grandComplete` celebration).
+- **Round** = one shuffled pass over the current key set (full level set, narrow set, or review subset).
+- **Duplicate** misses on the same fact in one round still produce **one** retry entry.
+- **`hadMissThisPack`** is set if **any** timed answer in the pack is wrong or timed out (messaging); it does **not** veto unlock once the **full** round passes.
+- **Restart this timed round**: reshuffle and reset to question 1 (`restartCurrentQuizRound`); no change to **`packPointScale`**.
+- **Start pack over from lesson**: return to **`intro`** at card 1 and **halve** **`packPointScale`** for correct-answer points on that pack (`restartPackFromLessonWithPointPenalty`). Choosing a level fresh from the grid (non-resume **`selectTable`**) clears **`packPointScale`**.
+- **Review lesson**: overlay with the same intro cards as the current level, available during intro, quiz, review, and bridge.
 
-## Points (implemented)
+## Points system & backoff
 
-- **Cumulative `totalPoints`** and per-fact **`factRewardWeight`** live on the saved game (`src/lib/persistence.ts`); rules in **`src/lib/points.ts`**.
-- **Baseline:** each **correct** timed answer adds **0.1** points for that fact.
-- **After a miss** (wrong or timeout) on a fact, the **next correct** on that fact earns up to **0.2**; each subsequent correct on that fact **decays** the weight back toward **0.1** (exponential decay on the amount above 0.1 — constant `POINT_WEIGHT_DECAY`).
-- Intro cards do **not** award points.
-- **Redeem** (top bar): parent password **`1234`** clears **`totalPoints`** and **`factRewardWeight`** (client-only gate; not secure against inspection).
-- **UX:** Total appears in the **top-right** on all screens; on a correct answer the pill **wiggles** (CSS keyframes). **`prefers-reduced-motion: reduce`** disables that animation.
-- **Copy:** The mode picker deliberately **does not** explain scoring in the footer — learners discover it through play and the pill tooltip.
+Implemented in **`src/lib/points.ts`**; stored on the save as **`totalPoints`** (cumulative) and **`factRewardWeight`** (per fact key `"a-b"`).
+
+### Baseline and bounds
+
+- **`POINT_BASE` (0.1)** — Default **reward weight** for a fact that has no stored weight yet (first drills).
+- **`POINT_FLOOR` (0.01)** — Minimum weight; decay approaches this from above.
+- **`POINT_PEAK` (0.2)** — Weight after a **wrong** or **timeout** on that fact; the **next correct** on that fact pays this much (then backoff applies again).
+
+Intro cards **do not** change points or weights. Only **timed quiz** answers (including review retries) do.
+
+**`packPointScale`** (on **`ModeProgress`**, implicit **1**): multiplied onto points from **`applyFactCorrect`** for that pack.
+
+### On a correct timed answer
+
+1. Add **`packPointScale ×`** the fact’s current weight `w` to **`totalPoints`**.
+2. **Backoff (decay):** update the stored weight toward the floor:
+
+   `w' = POINT_FLOOR + (w - POINT_FLOOR) × POINT_WEIGHT_DECAY`
+
+   with **`POINT_WEIGHT_DECAY = 0.78`**. The value is **quantized** to three decimal places and clamped to **[POINT_FLOOR, POINT_PEAK]**.
+
+So each repeated correct answer on the same fact earns a bit **less** than the previous one, asymptotically approaching **`POINT_FLOOR`** — a simple **per-fact backoff** that rewards consolidation without letting one easy fact dominate scoring forever.
+
+### On a wrong answer or timeout
+
+- **`applyFactWrong`** sets that fact’s weight to **`POINT_PEAK`**. The **next** correct on that fact pays **0.2** again (scaled by **`packPointScale`**), then decay resumes — i.e. **struggling facts pay more** until they stick.
+
+### UX & redeem
+
+- Total points in the **top-right**; correct answers can **animate** the pill (`prefers-reduced-motion` disables it).
+- Quiz UI shows a **preview** of the next reward for the current question (`formatNextRewardPreview`), including **`packPointScale`**.
+- **Redeem** (parent password **`1234`**) clears **`totalPoints`** and **`factRewardWeight`** (client-only; not secure against inspection).
+- The mode picker footer does **not** spell out scoring; discovery is through play and the pill.
 
 ## Edge cases
 
-- **Timeout** = incorrect (wrong stack + miss flag for the pack + fact weight bump for points).
-- **Duplicate** misses on the same fact in a round still yield **one** entry in the retry set.
+- **Timeout** counts like a wrong answer: wrong stack, **`hadMissThisPack`**, and **`applyFactWrong`** for points.
+- **Level 1**: narrow and full key sets are the same size (10 facts); the learner still goes through **narrow → bridge → full** for a consistent ritual.
 
 ## Persistence
 
 - **`localStorage`** key: `multiplication-tutor-v1`.
-- Saved shape is **`v: 4`** (older **`v: 3`** loads are upgraded on read): `screen`, `activeMode`, per-mode **`ModeProgress`** (`level`, phases `intro` | `quiz` | `review`, quiz slice, `reviewWrongKeys`, `hadMissThisPack`, `awaitingLevelAdvance`, `modeComplete`, …), **`totalPoints`**, **`factRewardWeight`**, mode unlock flags, optional `grandComplete`.
+- Saved shape is **`v: 4`** (older **`v: 3`** loads are upgraded on read): `screen`, `activeMode`, per-mode **`ModeProgress`** (`level`, **`phase`**: `intro` \| `fullMixBridge` \| `quiz` \| `review`, **`quizScope`**: `narrow` \| `full`, quiz slice, `reviewWrongKeys`, `hadMissThisPack`, `awaitingLevelAdvance`, `modeComplete`, **`packPointScale`**, …), **`totalPoints`**, **`factRewardWeight`**, mode unlock flags, optional `grandComplete`.
 - **Reset progress** clears storage and returns a fresh game (including points and bump UI state in the client).
 
 ## Technical map (repo)
 
 | Area | Location |
-|------|-----------|
+|------|----------|
 | Fact keys, level ranges, shuffle | `src/lib/facts.ts` |
 | Bronze / Silver / Gold timers & unlock helpers | `src/lib/modes.ts` |
-| Points math | `src/lib/points.ts` |
+| Points math, pass threshold & backoff constants | `src/lib/points.ts` |
 | Save / load / migrate / helpers | `src/lib/persistence.ts` |
 | Tips | `src/data/tips.ts` |
 | UI + state machine | `src/components/MultiplicationGame.tsx` |

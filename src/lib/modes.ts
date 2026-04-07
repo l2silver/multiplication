@@ -5,11 +5,11 @@ export const GAME_MODES: readonly GameMode[] = ["bronze", "silver", "gold"];
 export function secondsForMode(mode: GameMode): number {
   switch (mode) {
     case "bronze":
-      return 8;
+      return 10;
     case "silver":
-      return 6;
+      return 8;
     case "gold":
-      return 4;
+      return 6;
     default: {
       const _: never = mode;
       return _;
@@ -43,7 +43,7 @@ export function modeIsUnlocked(state: ModeUnlockState, mode: GameMode): boolean 
   return state.goldUnlocked;
 }
 
-/** One-time bonus `totalPoints` when you first clear a times-table pack in this mode (perfect run). */
+/** One-time bonus to `totalPoints` when you first pass a times-table pack in this mode (cumulative quiz). */
 export function packMedalCompletionBonus(mode: GameMode): number {
   switch (mode) {
     case "bronze":

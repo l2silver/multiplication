@@ -1,3 +1,18 @@
+/**
+ * Pass a **full / cumulative** timed round when (correct / total) is strictly greater
+ * than this value. **Narrow** rounds use a perfect run (no misses) in the game, not this threshold.
+ */
+export const LEVEL_PASS_ACCURACY_THRESHOLD = 0.89;
+
+/** `wrongCount` = distinct missed fact keys in the round; `total` = questions in the round. */
+export function roundMeetsPassAccuracy(
+  wrongCount: number,
+  total: number,
+): boolean {
+  if (total <= 0 || wrongCount < 0) return false;
+  return (total - wrongCount) / total > LEVEL_PASS_ACCURACY_THRESHOLD;
+}
+
 /** Default reward for a fact you haven’t stored a weight for yet (first drills). */
 export const POINT_BASE = 0.1;
 /** Minimum reward after many correct answers in a row on the same fact. */
@@ -34,10 +49,13 @@ export function applyFactCorrect(
   totalPoints: number,
   factRewardWeight: Record<string, number>,
   factKey: string,
+  pointScale: number = 1,
 ): { totalPoints: number; factRewardWeight: Record<string, number> } {
   const safeTotal = Number.isFinite(totalPoints) && totalPoints >= 0 ? totalPoints : 0;
+  const scale =
+    Number.isFinite(pointScale) && pointScale > 0 ? pointScale : 1;
   const w = rewardWeightForFact(factRewardWeight, factKey);
-  const nextTotal = safeTotal + w;
+  const nextTotal = safeTotal + w * scale;
   const nextRaw = POINT_FLOOR + (w - POINT_FLOOR) * POINT_WEIGHT_DECAY;
   const nextW = quantizeWeight(nextRaw);
   const nextMap = { ...factRewardWeight };
