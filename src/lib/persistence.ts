@@ -767,7 +767,6 @@ export function selectTable(g: SavedGame, table: number): SavedGame {
   if (table < 2 || table > maxTable()) return g;
   if (table > p.highestUnlockedTable) return g;
   const level = table - 1;
-  if (isPackCompletedForLevel(g, mode, level)) return g;
   const resume =
     p.level === level &&
     !p.awaitingLevelAdvance &&

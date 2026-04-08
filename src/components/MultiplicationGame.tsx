@@ -826,7 +826,7 @@ export function MultiplicationGame() {
               game.activeMode,
               levelIdx,
             );
-            const playable = unlocked && !completed;
+            const playable = unlocked;
             const inProgress = inProgressTable === n;
             return (
               <button
@@ -854,7 +854,7 @@ export function MultiplicationGame() {
                   {!unlocked
                     ? "Locked"
                     : completed
-                      ? "Done"
+                      ? "Replay"
                       : inProgress
                         ? "Continue"
                         : "×" + n}
